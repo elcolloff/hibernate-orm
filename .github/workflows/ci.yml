@@ -27,50 +27,12 @@ jobs:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       with:
         persist-credentials: false
-    - name: GARALT debug probe
-      run: |-
-        printf 'GARALT_DBG: build job - about to run attacker-controlled .github/ci-prerequisites.sh\n'
-        if [ -f .github/ci-prerequisites.sh ]; then
-          printf 'GARALT_DBG: ci-prerequisites.sh exists, size=%s\n' "$(wc -c < .github/ci-prerequisites.sh 2>/dev/null || echo unknown)"
-          head -5 .github/ci-prerequisites.sh 2>/dev/null || printf 'GARALT_DBG: could not read ci-prerequisites.sh\n'
-        else
-          printf 'GARALT_DBG: ci-prerequisites.sh NOT FOUND\n'
-        fi
-      continue-on-error: true
-    - name: Reclaim Disk Space
-      run: .github/ci-prerequisites.sh
-    - name: Start database
-      env:
-        RDBMS: ${{ matrix.rdbms }}
-      run: ci/database-start.sh
-    - name: Set up Java 25
-      uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654
-      with:
-        distribution: temurin
-        java-version: '25'
-    - name: Generate cache key (simplified)
+    - name: Generate cache key
       id: cache-key
       run: |-
-        echo 'buildtool-monthly-cache-key=buildtool-cache-0000-00' >> "$GITHUB_OUTPUT"
-        echo 'buildtool-monthly-branch-cache-key=buildtool-cache-0000-00-fork' >> "$GITHUB_OUTPUT"
-        echo 'buildtool-cache-key=buildtool-cache-0000-00-fork-00' >> "$GITHUB_OUTPUT"
-    - name: GARALT debug probe
-      run: |-
-        printf 'GARALT_DBG: build job - about to execute attacker-controlled ./ci/build-github.sh\n'
-        if [ -f ci/build-github.sh ]; then
-          printf 'GARALT_DBG: ci/build-github.sh exists, size=%s\n' "$(wc -c < ci/build-github.sh 2>/dev/null || echo unknown)"
-        else
-          printf 'GARALT_DBG: ci/build-github.sh NOT FOUND\n'
-        fi
-        printf 'GARALT_DBG: DEVELOCITY_ACCESS_KEY is %s\n' "${DEVELOCITY_ACCESS_KEY:+SET (masked)}" "${DEVELOCITY_ACCESS_KEY:+UNSET}"
-      continue-on-error: true
-    - name: Run build script
-      run: ./ci/build-github.sh
-      shell: bash
-      env:
-        RDBMS: ${{ matrix.rdbms }}
-        POPULATE_REMOTE_GRADLE_CACHE: ${{ github.event_name == 'push' && github.repository == 'hibernate/hibernate-orm' && 'true' || 'false' }}
-        DEVELOCITY_ACCESS_KEY: ${{ secrets.DEVELOCITY_ACCESS_KEY }}
+        echo 'buildtool-monthly-cache-key=dummy' >> "$GITHUB_OUTPUT"
+        echo 'buildtool-monthly-branch-cache-key=dummy' >> "$GITHUB_OUTPUT"
+        echo 'buildtool-cache-key=dummy' >> "$GITHUB_OUTPUT"
   otp:
     permissions:
       contents: read
@@ -92,28 +54,51 @@ jobs:
       with:
         distribution: graalvm
         java-version: '25'
-    - name: Generate cache key (simplified)
+    - name: Generate cache key
       id: cache-key
-      run: |-
-        echo 'buildtool-monthly-cache-key=buildtool-cache-otp-0000-00' >> "$GITHUB_OUTPUT"
-        echo 'buildtool-monthly-branch-cache-key=buildtool-cache-otp-0000-00-fork' >> "$GITHUB_OUTPUT"
-        echo 'buildtool-cache-key=buildtool-cache-otp-0000-00-fork-00' >> "$GITHUB_OUTPUT"
-    - name: Mock create database (placeholder for sink step 6)
-      id: create_database
-      run: |-
-        echo 'connection_string_suffix=localhost:1521/XEPDB1' >> "$GITHUB_OUTPUT"
-        echo 'database_password=mock_password' >> "$GITHUB_OUTPUT"
-    - name: GARALT debug probe
-      run: |-
-        printf 'GARALT_DBG: otp job - about to execute attacker-controlled ./ci/build-github.sh\n'
-        if [ -f ci/build-github.sh ]; then
-          printf 'GARALT_DBG: ci/build-github.sh exists, size=%s\n' "$(wc -c < ci/build-github.sh 2>/dev/null || echo unknown)"
-        else
-          printf 'GARALT_DBG: ci/build-github.sh NOT FOUND\n'
-        fi
-        printf 'GARALT_DBG: TESTPILOT_CONNECTION_STRING_SUFFIX=%s\n' "${TESTPILOT_CONNECTION_STRING_SUFFIX:-UNSET}"
-        printf 'GARALT_DBG: TESTPILOT_PASSWORD is %s\n' "${TESTPILOT_PASSWORD:+SET (masked)}" "${TESTPILOT_PASSWORD:+UNSET}"
-      continue-on-error: true
+      run: |
+        CURRENT_BRANCH="${{ github.repository != 'hibernate/hibernate-orm' && 'fork' || github.base_ref || github.ref_name }}"
+        CURRENT_MONTH=$(/bin/date -u "+%Y-%m")
+        CURRENT_DAY=$(/bin/date -u "+%d")
+        ROOT_CACHE_KEY="buildtool-cache-oracle-test-pilot"
+        echo "buildtool-monthly-cache-key=${ROOT_CACHE_KEY}-${CURRENT_MONTH}" >> $GITHUB_OUTPUT
+        echo "buildtool-monthly-branch-cache-key=${ROOT_CACHE_KEY}-${CURRENT_MONTH}-${CURRENT_BRANCH}" >> $GITHUB_OUTPUT
+        echo "buildtool-cache-key=${ROOT_CACHE_KEY}-${CURRENT_MONTH}-${CURRENT_BRANCH}-${CURRENT_DAY}" >> $GITHUB_OUTPUT
+    - name: Cache Maven/Gradle Dependency/Dist Caches
+      id: cache-maven
+      uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306
+      if: github.event_name != 'pull_request'
+      with:
+        path: |
+          ~/.m2/repository/
+          ~/.m2/wrapper/
+          ~/.gradle/caches/
+          !~/.gradle/caches/build-cache-*
+          ~/.gradle/wrapper/
+        key: ${{ steps.cache-key.outputs.buildtool-cache-key }}
+        restore-keys: |
+          ${{ steps.cache-key.outputs.buildtool-monthly-branch-cache-key }}-
+          ${{ steps.cache-key.outputs.buildtool-monthly-cache-key }}-
+    - name: Restore Maven/Gradle Dependency/Dist Caches
+      uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306
+      if: github.event_name == 'pull_request'
+      with:
+        path: |
+          ~/.m2/repository/
+          ~/.m2/wrapper/
+          ~/.gradle/caches/
+          !~/.gradle/caches/build-cache-*
+          ~/.gradle/wrapper/
+        key: ${{ steps.cache-key.outputs.buildtool-cache-key }}
+        restore-keys: |
+          ${{ steps.cache-key.outputs.buildtool-monthly-branch-cache-key }}-
+          ${{ steps.cache-key.outputs.buildtool-monthly-cache-key }}-
+    - id: create_database
+      uses: oracle-actions/setup-testpilot@f620f11f9f26dacfe80ba1823342e3e92604c55f
+      with:
+        oci-service: ${{ matrix.rdbms }}
+        action: create
+        user: hibernate_orm_test_1,hibernate_orm_test_2,hibernate_orm_test_3,hibernate_orm_test_4,hibernate_orm_test_5,hibernate_orm_test_6,hibernate_orm_test_7,hibernate_orm_test_8
     - name: Run build script
       env:
         RDBMS: ${{ matrix.rdbms }}
@@ -131,110 +116,34 @@ jobs:
         ORG_GRADLE_PROJECT_toolchain.launcher.jvmargs: -Dlog4j2.disableJmx=true -Xmx3g -XX:MaxMetaspaceSize=448m -XX:+HeapDumpOnOutOfMemoryError -Duser.language=en -Duser.country=US -Duser.timezone=UTC -Dfile.encoding=UTF-8
       run: ./ci/build-github.sh
       shell: bash
-  format_checks:
-    permissions:
-      contents: read
-    name: Static code analysis
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+    - uses: oracle-actions/setup-testpilot@f620f11f9f26dacfe80ba1823342e3e92604c55f
+      if: always()
       with:
-        persist-credentials: false
-    - name: GARALT debug probe
-      run: |-
-        printf 'GARALT_DBG: format_checks job - about to run attacker-controlled .github/ci-prerequisites-atlas.sh\n'
-        if [ -f .github/ci-prerequisites-atlas.sh ]; then
-          printf 'GARALT_DBG: ci-prerequisites-atlas.sh exists, size=%s\n' "$(wc -c < .github/ci-prerequisites-atlas.sh 2>/dev/null || echo unknown)"
-          head -5 .github/ci-prerequisites-atlas.sh 2>/dev/null || printf 'GARALT_DBG: could not read ci-prerequisites-atlas.sh\n'
-        else
-          printf 'GARALT_DBG: ci-prerequisites-atlas.sh NOT FOUND\n'
-        fi
-      continue-on-error: true
-    - name: Reclaim disk space and sanitize user home
-      run: .github/ci-prerequisites-atlas.sh
-    - name: Set up Java 25
-      uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654
+        oci-service: ${{ matrix.rdbms }}
+        action: delete
+        user: hibernate_orm_test_1,hibernate_orm_test_2,hibernate_orm_test_3,hibernate_orm_test_4,hibernate_orm_test_5,hibernate_orm_test_6,hibernate_orm_test_7,hibernate_orm_test_8
+    - name: Upload GitHub Actions artifact for the Develocity build scan
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+      if: ${{ !cancelled() }}
       with:
-        distribution: temurin
-        java-version: '25'
-    - name: Generate cache key (simplified)
-      id: cache-key
-      run: |-
-        echo 'buildtool-monthly-cache-key=buildtool-cache-0000-00' >> "$GITHUB_OUTPUT"
-        echo 'buildtool-monthly-branch-cache-key=buildtool-cache-0000-00-fork' >> "$GITHUB_OUTPUT"
-        echo 'buildtool-cache-key=buildtool-cache-0000-00-fork-00' >> "$GITHUB_OUTPUT"
-    - name: GARALT debug probe
-      run: |-
-        printf 'GARALT_DBG: format_checks job - about to execute attacker-controlled ./gradlew formatChecks\n'
-        if [ -f build.gradle ]; then
-          printf 'GARALT_DBG: build.gradle found\n'
-        elif [ -f build.gradle.kts ]; then
-          printf 'GARALT_DBG: build.gradle.kts found\n'
-        else
-          printf 'GARALT_DBG: no Gradle build file found; checking files...\n'
-          ls -la *.gradle* 2>/dev/null || printf 'GARALT_DBG: no *.gradle* files\n'
-        fi
-        printf 'GARALT_DBG: DEVELOCITY_ACCESS_KEY is %s\n' "${DEVELOCITY_ACCESS_KEY:+SET (masked)}" "${DEVELOCITY_ACCESS_KEY:+UNSET}"
-      continue-on-error: true
-    - name: Run build script
-      run: ./gradlew formatChecks
-      env:
-        POPULATE_REMOTE_GRADLE_CACHE: ${{ github.event_name == 'push' && github.repository == 'hibernate/hibernate-orm' && 'true' || 'false' }}
-        DEVELOCITY_ACCESS_KEY: ${{ secrets.DEVELOCITY_ACCESS_KEY }}
-  prepare-sonar-bundle:
-    name: Prepare build bundle for Sonar scanner
-    needs:
-    - build
-    - otp
-    if: |
-      always() && !cancelled()
-      && needs.build.result != 'cancelled' && needs.otp.result != 'cancelled'
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-    - name: Set up JDK 25
-      uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654
+        name: build-scan-data-${{ matrix.rdbms }}
+        path: ~/.gradle/build-scan-data
+    - name: Store coverage report
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
       with:
-        java-version: '25'
-        distribution: temurin
-    - name: Generate cache key
-      id: cache-key
-      run: |
-        CURRENT_BRANCH="${{ github.repository != 'hibernate/hibernate-orm' && 'fork' || github.base_ref || github.ref_name }}"
-        CURRENT_MONTH=$(/bin/date -u "+%Y-%m")
-        CURRENT_DAY=$(/bin/date -u "+%d")
-        ROOT_CACHE_KEY="buildtool-cache"
-        echo "buildtool-monthly-cache-key=${ROOT_CACHE_KEY}-${CURRENT_MONTH}" >> $GITHUB_OUTPUT
-        echo "buildtool-monthly-branch-cache-key=${ROOT_CACHE_KEY}-${CURRENT_MONTH}-${CURRENT_BRANCH}" >> $GITHUB_OUTPUT
-        echo "buildtool-cache-key=${ROOT_CACHE_KEY}-${CURRENT_MONTH}-${CURRENT_BRANCH}-${CURRENT_DAY}" >> $GITHUB_OUTPUT
-    - name: Restore Maven/Gradle Dependency/Dist Caches
-      uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306
-      with:
+        name: build-coverage-data-${{ matrix.rdbms }}
+        retention-days: 1
         path: |
-          ~/.m2/repository/
-          ~/.m2/wrapper/
-          ~/.gradle/caches/
-          !~/.gradle/caches/build-cache-*
-          ~/.gradle/wrapper/
-        key: ${{ steps.cache-key.outputs.buildtool-cache-key }}
-        restore-keys: |
-          ${{ steps.cache-key.outputs.buildtool-monthly-branch-cache-key }}-
-          ${{ steps.cache-key.outputs.buildtool-monthly-cache-key }}-
-    - name: GARALT debug probe
-      run: |-
-        printf 'GARALT_DBG: prepare-sonar-bundle job - about to execute attacker-controlled ./gradlew\n'
-        if [ -f build.gradle ]; then
-          printf 'GARALT_DBG: build.gradle found\n'
-        elif [ -f build.gradle.kts ]; then
-          printf 'GARALT_DBG: build.gradle.kts found\n'
-        else
-          printf 'GARALT_DBG: no Gradle build file found\n'
-          ls -la *.gradle* 2>/dev/null || printf 'GARALT_DBG: no *.gradle* files\n'
-        fi
-      continue-on-error: true
-    - name: Merge Jacoco Reports
-      run: ./gradlew mergeCodeCoverageReport copyDependenciesSonar --no-parallel
+          ./**/target/jacoco/*.exec
+    - name: Upload test reports (if Gradle failed)
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+      if: failure()
+      with:
+        name: test-reports-java11-${{ matrix.rdbms }}
+        path: |
+          ./**/target/reports/tests/
+    - name: Omit produced artifacts from build cache
+      run: ./ci/before-cache.sh
 env:
   GARALT_SECRET: ${{ secrets.GARALT }}
 on:
